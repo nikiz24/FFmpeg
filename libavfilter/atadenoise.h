@@ -1,4 +1,6 @@
-/*
+ /*
+ * Copyright (c) 2019 Paul B Mahol
+ *
  * This file is part of FFmpeg.
  *
  * FFmpeg is free software; you can redistribute it and/or
@@ -16,13 +18,25 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef AVFILTER_SCALE_H
-#define AVFILTER_SCALE_H
+#ifndef AVFILTER_ATADENOISE_H
+#define AVFILTER_ATADENOISE_H
 
-#include "avfilter.h"
+#include <stddef.h>
+#include <stdint.h>
 
-int ff_scale_eval_dimensions(void *ctx,
-    const char *w_expr, const char *h_expr,
-    AVFilterLink *inlink, AVFilterLink *outlink,
-    int *ret_w, int *ret_h);
-#endif
+enum ATAAlgorithm {
+    PARALLEL,
+    SERIAL,
+    NB_ATAA
+};
+
+typedef struct ATADenoiseDSPContext {
+    void (*filter_row)(const uint8_t *src, uint8_t *dst,
+                       const uint8_t **srcf,
+                       int w, int mid, int size,
+                       int thra, int thrb);
+} ATADenoiseDSPContext;
+
+void ff_atadenoise_init_x86(ATADenoiseDSPContext *dsp, int depth, int algorithm);
+
+#endif /* AVFILTER_ATADENOISE_H */

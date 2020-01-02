@@ -95,10 +95,16 @@ typedef struct X264Context {
     int scenechange_threshold;
     int noise_reduction;
 
-    char *x264_params;
+    AVDictionary *x264_params;
 
     int nb_reordered_opaque, next_reordered_opaque;
     int64_t *reordered_opaque;
+
+    /**
+     * If the encoder does not support ROI then warn the first time we
+     * encounter a frame with ROI side data.
+     */
+    int roi_warned;
 } X264Context;
 
 static void X264_log(void *p, int level, const char *fmt, va_list args)
@@ -356,7 +362,10 @@ static int X264_frame(AVCodecContext *ctx, AVPacket *pkt, const AVFrame *frame,
         sd = av_frame_get_side_data(frame, AV_FRAME_DATA_REGIONS_OF_INTEREST);
         if (sd) {
             if (x4->params.rc.i_aq_mode == X264_AQ_NONE) {
-                av_log(ctx, AV_LOG_WARNING, "Adaptive quantization must be enabled to use ROI encoding, skipping ROI.\n");
+                if (!x4->roi_warned) {
+                    x4->roi_warned = 1;
+                    av_log(ctx, AV_LOG_WARNING, "Adaptive quantization must be enabled to use ROI encoding, skipping ROI.\n");
+                }
             } else {
                 if (frame->interlaced_frame == 0) {
                     int mbx = (frame->width + MB_SIZE - 1) / MB_SIZE;
@@ -410,7 +419,10 @@ static int X264_frame(AVCodecContext *ctx, AVPacket *pkt, const AVFrame *frame,
                     x4->pic.prop.quant_offsets = qoffsets;
                     x4->pic.prop.quant_offsets_free = av_free;
                 } else {
-                    av_log(ctx, AV_LOG_WARNING, "interlaced_frame not supported for ROI encoding yet, skipping ROI.\n");
+                    if (!x4->roi_warned) {
+                        x4->roi_warned = 1;
+                        av_log(ctx, AV_LOG_WARNING, "interlaced_frame not supported for ROI encoding yet, skipping ROI.\n");
+                    }
                 }
             }
         }
@@ -880,19 +892,14 @@ FF_ENABLE_DEPRECATION_WARNINGS
         }
     }
 
-    if (x4->x264_params) {
-        AVDictionary *dict    = NULL;
+
+    {
         AVDictionaryEntry *en = NULL;
-
-        if (!av_dict_parse_string(&dict, x4->x264_params, "=", ":", 0)) {
-            while ((en = av_dict_get(dict, "", en, AV_DICT_IGNORE_SUFFIX))) {
-                if (x264_param_parse(&x4->params, en->key, en->value) < 0)
-                    av_log(avctx, AV_LOG_WARNING,
-                           "Error parsing option '%s = %s'.\n",
-                            en->key, en->value);
-            }
-
-            av_dict_free(&dict);
+        while (en = av_dict_get(x4->x264_params, "", en, AV_DICT_IGNORE_SUFFIX)) {
+           if (x264_param_parse(&x4->params, en->key, en->value) < 0)
+               av_log(avctx, AV_LOG_WARNING,
+                      "Error parsing option '%s = %s'.\n",
+                       en->key, en->value);
         }
     }
 
@@ -1104,7 +1111,7 @@ static const AVOption options[] = {
     { "sc_threshold", "Scene change threshold",                           OFFSET(scenechange_threshold), AV_OPT_TYPE_INT, { .i64 = -1 }, INT_MIN, INT_MAX, VE },
     { "noise_reduction", "Noise reduction",                               OFFSET(noise_reduction), AV_OPT_TYPE_INT, { .i64 = -1 }, INT_MIN, INT_MAX, VE },
 
-    { "x264-params",  "Override the x264 configuration using a :-separated list of key=value parameters", OFFSET(x264_params), AV_OPT_TYPE_STRING, { 0 }, 0, 0, VE },
+    { "x264-params",  "Override the x264 configuration using a :-separated list of key=value parameters", OFFSET(x264_params), AV_OPT_TYPE_DICT, { 0 }, 0, 0, VE },
     { NULL },
 };
 
@@ -1168,7 +1175,11 @@ AVCodec ff_libx264_encoder = {
     .priv_class       = &x264_class,
     .defaults         = x264_defaults,
     .init_static_data = X264_init_static,
+#if X264_BUILD >= 158
+    .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP | FF_CODEC_CAP_INIT_THREADSAFE,
+#else
     .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
+#endif
     .wrapper_name     = "libx264",
 };
 #endif
@@ -1195,6 +1206,11 @@ AVCodec ff_libx264rgb_encoder = {
     .priv_class     = &rgbclass,
     .defaults       = x264_defaults,
     .pix_fmts       = pix_fmts_8bit_rgb,
+#if X264_BUILD >= 158
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP | FF_CODEC_CAP_INIT_THREADSAFE,
+#else
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
+#endif
     .wrapper_name   = "libx264",
 };
 #endif

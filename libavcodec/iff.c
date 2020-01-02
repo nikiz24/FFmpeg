@@ -180,6 +180,10 @@ static int cmap_read_palette(AVCodecContext *avctx, uint32_t *pal)
             pal[i] = 0xFF000000 | gray2rgb((i * 255) >> avctx->bits_per_coded_sample);
     }
     if (s->masking == MASK_HAS_MASK) {
+        if ((1 << avctx->bits_per_coded_sample) < count) {
+            avpriv_request_sample(avctx, "overlapping mask");
+            return AVERROR_PATCHWELCOME;
+        }
         memcpy(pal + (1 << avctx->bits_per_coded_sample), pal, count * 4);
         for (i = 0; i < count; i++)
             pal[i] &= 0xFFFFFF;
@@ -318,6 +322,8 @@ static int extract_header(AVCodecContext *const avctx,
             av_log(avctx, AV_LOG_ERROR, "Invalid number of bitplanes: %u\n", s->bpp);
             return AVERROR_INVALIDDATA;
         }
+        if (s->video_size && s->planesize * s->bpp * avctx->height > s->video_size)
+            return AVERROR_INVALIDDATA;
 
         av_freep(&s->ham_buf);
         av_freep(&s->ham_palbuf);
@@ -452,11 +458,12 @@ static av_cold int decode_init(AVCodecContext *avctx)
  */
 static void decodeplane8(uint8_t *dst, const uint8_t *buf, int buf_size, int plane)
 {
-    const uint64_t *lut = plane8_lut[plane];
+    const uint64_t *lut;
     if (plane >= 8) {
         av_log(NULL, AV_LOG_WARNING, "Ignoring extra planes beyond 8\n");
         return;
     }
+    lut = plane8_lut[plane];
     do {
         uint64_t v = AV_RN64A(dst) | lut[*buf++];
         AV_WN64A(dst, v);
@@ -1139,6 +1146,9 @@ static void decode_long_vertical_delta(uint8_t *dst,
                         x = bytestream2_get_be32(&dgb);
                     }
 
+                    if (ofsdst + (opcode - 1LL) * dstpitch > bytestream2_size_p(&pb))
+                        return;
+
                     while (opcode) {
                         bytestream2_seek_p(&pb, ofsdst, SEEK_SET);
                         if (h && (j == (ncolumns - 1))) {
@@ -1279,6 +1289,9 @@ static void decode_long_vertical_delta2(uint8_t *dst,
                         x = bytestream2_get_be32(&gb);
                     }
 
+                    if (ofsdst + (opcode - 1LL) * dstpitch > bytestream2_size_p(&pb))
+                        return;
+
                     while (opcode && bytestream2_get_bytes_left_p(&pb) > 1) {
                         bytestream2_seek_p(&pb, ofsdst, SEEK_SET);
                         if (h && (j == ncolumns - 1))
@@ -1348,6 +1361,8 @@ static void decode_delta_d(uint8_t *dst,
             bytestream2_seek_p(&pb, (offset / planepitch_byte) * pitch + (offset % planepitch_byte) + k * planepitch, SEEK_SET);
             if (opcode >= 0) {
                 uint32_t x = bytestream2_get_be32(&gb);
+                if (opcode && 4 + (opcode - 1LL) * pitch > bytestream2_get_bytes_left_p(&pb))
+                    continue;
                 while (opcode && bytestream2_get_bytes_left_p(&pb) > 0) {
                     bytestream2_put_be32(&pb, x);
                     bytestream2_skip_p(&pb, pitch - 4);

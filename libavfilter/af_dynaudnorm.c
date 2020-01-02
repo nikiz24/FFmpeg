@@ -67,7 +67,6 @@ typedef struct DynamicAudioNormalizerContext {
     double *weights;
 
     int channels;
-    int delay;
     int eof;
     int64_t pts;
 
@@ -110,8 +109,8 @@ static av_cold int init(AVFilterContext *ctx)
     DynamicAudioNormalizerContext *s = ctx->priv;
 
     if (!(s->filter_size & 1)) {
-        av_log(ctx, AV_LOG_ERROR, "filter size %d is invalid. Must be an odd value.\n", s->filter_size);
-        return AVERROR(EINVAL);
+        av_log(ctx, AV_LOG_WARNING, "filter size %d is invalid. Changing to an odd value.\n", s->filter_size);
+        s->filter_size |= 1;
     }
 
     return 0;
@@ -345,7 +344,6 @@ static int config_input(AVFilterLink *inlink)
     init_gaussian_filter(s);
 
     s->channels = inlink->channels;
-    s->delay = s->filter_size;
 
     return 0;
 }
@@ -717,7 +715,6 @@ static int flush_buffer(DynamicAudioNormalizerContext *s, AVFilterLink *inlink,
         }
     }
 
-    s->delay--;
     return filter_frame(inlink, out);
 }
 
@@ -734,7 +731,6 @@ static int flush(AVFilterLink *outlink)
 
         s->pts = out->pts;
         ret = ff_filter_frame(outlink, out);
-        s->delay = s->queue.available;
     }
 
     return ret;
@@ -772,10 +768,10 @@ static int activate(AVFilterContext *ctx)
             s->eof = 1;
     }
 
-    if (s->eof && s->delay > 0)
+    if (s->eof && s->queue.available)
         return flush(outlink);
 
-    if (s->eof && s->delay <= 0) {
+    if (s->eof && !s->queue.available) {
         ff_outlink_set_status(outlink, AVERROR_EOF, s->pts);
         return 0;
     }

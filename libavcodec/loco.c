@@ -155,12 +155,16 @@ static int loco_decode_plane(LOCOContext *l, uint8_t *data, int width, int heigh
     /* restore top line */
     for (i = 1; i < width; i++) {
         val = loco_get_rice(&rc);
+        if (val == INT_MIN)
+           return AVERROR_INVALIDDATA;
         data[i] = data[i - 1] + val;
     }
     data += stride;
     for (j = 1; j < height; j++) {
         /* restore left column */
         val = loco_get_rice(&rc);
+        if (val == INT_MIN)
+           return AVERROR_INVALIDDATA;
         data[0] = data[-stride] + val;
         /* restore all other pixels */
         for (i = 1; i < width; i++) {

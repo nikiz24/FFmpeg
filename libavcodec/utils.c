@@ -412,7 +412,7 @@ int avcodec_fill_audio_frame(AVFrame *frame, int nb_channels,
 void ff_color_frame(AVFrame *frame, const int c[4])
 {
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(frame->format);
-    int p, y, x;
+    int p, y;
 
     av_assert0(desc->flags & AV_PIX_FMT_FLAG_PLANAR);
 
@@ -421,13 +421,19 @@ void ff_color_frame(AVFrame *frame, const int c[4])
         int is_chroma = p == 1 || p == 2;
         int bytes  = is_chroma ? AV_CEIL_RSHIFT(frame->width,  desc->log2_chroma_w) : frame->width;
         int height = is_chroma ? AV_CEIL_RSHIFT(frame->height, desc->log2_chroma_h) : frame->height;
-        for (y = 0; y < height; y++) {
-            if (desc->comp[0].depth >= 9) {
-                for (x = 0; x<bytes; x++)
-                    ((uint16_t*)dst)[x] = c[p];
-            }else
-                memset(dst, c[p], bytes);
+        if (desc->comp[0].depth >= 9) {
+            ((uint16_t*)dst)[0] = c[p];
+            av_memcpy_backptr(dst + 2, 2, bytes - 2);
             dst += frame->linesize[p];
+            for (y = 1; y < height; y++) {
+                memcpy(dst, frame->data[p], 2*bytes);
+                dst += frame->linesize[p];
+            }
+        } else {
+            for (y = 0; y < height; y++) {
+                memset(dst, c[p], bytes);
+                dst += frame->linesize[p];
+            }
         }
     }
 }
@@ -648,12 +654,12 @@ int attribute_align_arg avcodec_open2(AVCodecContext *avctx, const AVCodec *code
     // only call ff_set_dimensions() for non H.264/VP6F/DXV codecs so as not to overwrite previously setup dimensions
     if (!(avctx->coded_width && avctx->coded_height && avctx->width && avctx->height &&
           (avctx->codec_id == AV_CODEC_ID_H264 || avctx->codec_id == AV_CODEC_ID_VP6F || avctx->codec_id == AV_CODEC_ID_DXV))) {
-    if (avctx->coded_width && avctx->coded_height)
-        ret = ff_set_dimensions(avctx, avctx->coded_width, avctx->coded_height);
-    else if (avctx->width && avctx->height)
-        ret = ff_set_dimensions(avctx, avctx->width, avctx->height);
-    if (ret < 0)
-        goto free_and_end;
+        if (avctx->coded_width && avctx->coded_height)
+            ret = ff_set_dimensions(avctx, avctx->coded_width, avctx->coded_height);
+        else if (avctx->width && avctx->height)
+            ret = ff_set_dimensions(avctx, avctx->width, avctx->height);
+        if (ret < 0)
+            goto free_and_end;
     }
 
     if ((avctx->coded_width || avctx->coded_height || avctx->width || avctx->height)
@@ -678,8 +684,18 @@ int attribute_align_arg avcodec_open2(AVCodecContext *avctx, const AVCodec *code
     if (av_codec_is_decoder(codec))
         av_freep(&avctx->subtitle_header);
 
-    if (avctx->channels > FF_SANE_NB_CHANNELS) {
-        av_log(avctx, AV_LOG_ERROR, "Too many channels: %d\n", avctx->channels);
+    if (avctx->channels > FF_SANE_NB_CHANNELS || avctx->channels < 0) {
+        av_log(avctx, AV_LOG_ERROR, "Too many or invalid channels: %d\n", avctx->channels);
+        ret = AVERROR(EINVAL);
+        goto free_and_end;
+    }
+    if (avctx->sample_rate < 0) {
+        av_log(avctx, AV_LOG_ERROR, "Invalid sample rate: %d\n", avctx->sample_rate);
+        ret = AVERROR(EINVAL);
+        goto free_and_end;
+    }
+    if (avctx->block_align < 0) {
+        av_log(avctx, AV_LOG_ERROR, "Invalid block align: %d\n", avctx->block_align);
         ret = AVERROR(EINVAL);
         goto free_and_end;
     }
@@ -1028,6 +1044,9 @@ free_and_end:
         (codec_init_ok ||
          (avctx->codec->caps_internal & FF_CODEC_CAP_INIT_CLEANUP)))
         avctx->codec->close(avctx);
+
+    if (HAVE_THREADS && avctx->internal->thread_ctx)
+        ff_thread_free(avctx);
 
     if (codec->priv_class && codec->priv_data_size)
         av_opt_free(avctx->priv_data);
@@ -1491,7 +1510,7 @@ int av_get_exact_bits_per_sample(enum AVCodecID codec_id)
 
 enum AVCodecID av_get_pcm_codec(enum AVSampleFormat fmt, int be)
 {
-    static const enum AVCodecID map[AV_SAMPLE_FMT_NB][2] = {
+    static const enum AVCodecID map[][2] = {
         [AV_SAMPLE_FMT_U8  ] = { AV_CODEC_ID_PCM_U8,    AV_CODEC_ID_PCM_U8    },
         [AV_SAMPLE_FMT_S16 ] = { AV_CODEC_ID_PCM_S16LE, AV_CODEC_ID_PCM_S16BE },
         [AV_SAMPLE_FMT_S32 ] = { AV_CODEC_ID_PCM_S32LE, AV_CODEC_ID_PCM_S32BE },
@@ -1504,7 +1523,7 @@ enum AVCodecID av_get_pcm_codec(enum AVSampleFormat fmt, int be)
         [AV_SAMPLE_FMT_FLTP] = { AV_CODEC_ID_PCM_F32LE, AV_CODEC_ID_PCM_F32BE },
         [AV_SAMPLE_FMT_DBLP] = { AV_CODEC_ID_PCM_F64LE, AV_CODEC_ID_PCM_F64BE },
     };
-    if (fmt < 0 || fmt >= AV_SAMPLE_FMT_NB)
+    if (fmt < 0 || fmt >= FF_ARRAY_ELEMS(map))
         return AV_CODEC_ID_NONE;
     if (be < 0 || be > 1)
         be = AV_NE(1, 0);
