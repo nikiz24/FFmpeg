@@ -38,14 +38,12 @@
 #include "h264_ps.h"
 #include "h264_sei.h"
 #include "sei.h"
-#include "sys/time.h"
+#include "libavutil/time.h"
 
 #define AVERROR_PS_NOT_FOUND      FFERRTAG(0xF8,'?','P','S')
 
 static long NowInMilliSeconds() {
-    struct timeval t = {0, 0};
-    gettimeofday(&t, NULL);
-    return t.tv_sec * 1000ll + t.tv_usec / 1000;
+    return av_gettime() / 1000;
 }
 
 static const uint8_t sei_num_clock_ts_table[9] = {

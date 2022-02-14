@@ -27,12 +27,10 @@
 #include "golomb.h"
 #include "hevc_ps.h"
 #include "hevc_sei.h"
-#include "sys/time.h"
+#include "libavutil/time.h"
 
 static long NowInMilliSeconds() {
-    struct timeval t = {0, 0};
-    gettimeofday(&t, NULL);
-    return t.tv_sec * 1000ll + t.tv_usec / 1000;
+    return av_gettime() / 1000;
 }
 
 static int decode_nal_sei_decoded_picture_hash(HEVCSEIPictureHash *s, GetBitContext *gb)
