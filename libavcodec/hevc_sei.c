@@ -27,6 +27,13 @@
 #include "golomb.h"
 #include "hevc_ps.h"
 #include "hevc_sei.h"
+#include "sys/time.h"
+
+static long NowInMilliSeconds() {
+    struct timeval t = {0, 0};
+    gettimeofday(&t, NULL);
+    return t.tv_sec * 1000ll + t.tv_usec / 1000;
+}
 
 static int decode_nal_sei_decoded_picture_hash(HEVCSEIPictureHash *s, GetBitContext *gb)
 {
@@ -192,7 +199,7 @@ static int decode_registered_user_data_closed_caption(HEVCSEIA53Caption *s, GetB
 }
 
 static int decode_nal_sei_user_data_unregistered(HEVCSEIUnregistered *s, GetBitContext *gb,
-                                                      int size)
+                                                      void *logctx, int size)
 {
     AVBufferRef *buf_ref, **tmp;
 
@@ -208,11 +215,82 @@ static int decode_nal_sei_user_data_unregistered(HEVCSEIUnregistered *s, GetBitC
     if (!buf_ref)
         return AVERROR(ENOMEM);
 
-    for (int i = 0; i < size; i++)
-        buf_ref->data[i] = get_bits(gb, 8);
+    char *sei;
+    sei = malloc(size - 15);
+    strcpy(sei, ""); 
+    char *uuid;
+    uuid = malloc(size + 1);
+    for (int i = 0; i < size; i++) {
+        char tmp = get_bits(gb, 8);
+        if (i < 16) {
+            char str1[2] = {tmp, '\0'};
+            strcat(uuid, str1);
+        } else {
+            if (31 < tmp && tmp < 127) {
+                buf_ref->data[i] = tmp;
+                char str1[2] = {tmp, '\0'};
+                strcat(sei, str1);
+            } else if (get_bits_left(gb) > 16) {
+                char tmp1 = get_bits(gb, 8);
+                int va = tmp * 256 + tmp1;
+                char str2[16];
+                sprintf(str2, "%d", va);
+                strcat(sei, str2);
+                buf_ref->data[i] = va;
+                i++;
+            }
+        }
+    }
+    
     buf_ref->data[size] = 0;
     buf_ref->size = size;
     s->buf_ref[s->nb_buf_ref++] = buf_ref;
+    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"info\":%s, \"local_time\":%ld}\n", 5, size, sei, NowInMilliSeconds());
+
+    return 0;
+}
+
+static int decode_nal_sei_type_unregistered(HEVCSEIUnregistered *s, GetBitContext *gb,
+                                                      void *logctx, int type, int size)
+{
+    AVBufferRef *buf_ref, **tmp;
+
+    if (size >= INT_MAX - 1)
+       return AVERROR_INVALIDDATA;
+
+    tmp = av_realloc_array(s->buf_ref, s->nb_buf_ref + 1, sizeof(*s->buf_ref));
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    s->buf_ref = tmp;
+
+    buf_ref = av_buffer_alloc(size + 1);
+    if (!buf_ref)
+        return AVERROR(ENOMEM);
+
+    char *sei;
+    sei = malloc(size + 1);
+    strcpy(sei, ""); 
+    for (int i = 0; i < size; i++) {
+        char tmp = get_bits(gb, 8);
+        if (31 < tmp && tmp < 127) {
+            buf_ref->data[i] = tmp;
+            char str1[2] = {tmp, '\0'};
+            strcat(sei, str1);
+        } else if (get_bits_left(gb) > 16) {
+            char tmp1 = get_bits(gb, 8);
+            int va = tmp * 256 + tmp1;
+            char str2[16];
+            sprintf(str2, "%d", va);
+            strcat(sei, str2);
+            buf_ref->data[i] = va;
+            i++;
+        }
+    }
+
+    buf_ref->data[size] = 0;
+    buf_ref->size = size;
+    s->buf_ref[s->nb_buf_ref++] = buf_ref;
+    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"info\":%s, \"local_time\":%ld}\n", type, size, sei, NowInMilliSeconds());
 
     return 0;
 }
@@ -475,7 +553,7 @@ static int decode_nal_sei_prefix(GetBitContext *gb, void *logctx, HEVCSEI *s,
     case SEI_TYPE_USER_DATA_REGISTERED_ITU_T_T35:
         return decode_nal_sei_user_data_registered_itu_t_t35(s, gb, logctx, size);
     case SEI_TYPE_USER_DATA_UNREGISTERED:
-        return decode_nal_sei_user_data_unregistered(&s->unregistered, gb, size);
+        return decode_nal_sei_user_data_unregistered(&s->unregistered, gb, logctx, size);
     case SEI_TYPE_ALTERNATIVE_TRANSFER_CHARACTERISTICS:
         return decode_nal_sei_alternative_transfer(&s->alternative_transfer, gb, size);
     case SEI_TYPE_TIME_CODE:
@@ -483,6 +561,7 @@ static int decode_nal_sei_prefix(GetBitContext *gb, void *logctx, HEVCSEI *s,
     case SEI_TYPE_FILM_GRAIN_CHARACTERISTICS:
         return decode_film_grain_characteristics(&s->film_grain_characteristics, gb);
     default:
+        decode_nal_sei_type_unregistered(&s->unregistered, gb, logctx, type, size);
         av_log(logctx, AV_LOG_DEBUG, "Skipped PREFIX SEI %d\n", type);
         skip_bits_long(gb, 8 * size);
         return 0;
