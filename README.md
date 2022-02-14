@@ -1,3 +1,9 @@
+What Different
+=============
+1. Add hevc support to FLV/RTMP
+2. parse & print sei (type 5 or undef type)
+
+
 FFmpeg README
 =============
 
