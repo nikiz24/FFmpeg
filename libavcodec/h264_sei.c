@@ -276,12 +276,12 @@ static int decode_unregistered_user_data(H264SEIUnregistered *h, GetBitContext *
     char *sei;
     sei = malloc(size - 15);
     strcpy(sei, ""); 
-    char *uuid;
-    uuid = malloc(size + 1);
+    char uuid[48] = {0};
     for (i = 0; i < size; i++) {
         char tmp = get_bits(gb, 8);
         if (i < 16) {
-            char str1[2] = {tmp, '\0'};
+            unsigned char str1[4] = {0};
+            sprintf(str1, "%02X", (unsigned char) tmp);
             strcat(uuid, str1);
         } else {
             if (31 < tmp && tmp < 127) {
@@ -303,7 +303,7 @@ static int decode_unregistered_user_data(H264SEIUnregistered *h, GetBitContext *
     user_data[i] = 0;
     buf_ref->size = size;
     h->buf_ref[h->nb_buf_ref++] = buf_ref;
-    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"info\":\"%s\", \"local_time\":%ld}\n", 5, size, sei, NowInMilliSeconds());
+    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"uuid\":\"%s\", \"info\":\"%s\", \"local_time\":%ld}\n", 5, size, uuid, sei, NowInMilliSeconds());
 
     e = sscanf(user_data + 16, "x264 - core %d", &build);
     if (e == 1 && build > 0)

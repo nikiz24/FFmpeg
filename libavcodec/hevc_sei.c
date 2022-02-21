@@ -216,12 +216,12 @@ static int decode_nal_sei_user_data_unregistered(HEVCSEIUnregistered *s, GetBitC
     char *sei;
     sei = malloc(size - 15);
     strcpy(sei, ""); 
-    char *uuid;
-    uuid = malloc(size + 1);
+    char uuid[48] = {0};
     for (int i = 0; i < size; i++) {
         char tmp = get_bits(gb, 8);
         if (i < 16) {
-            char str1[2] = {tmp, '\0'};
+            unsigned char str1[4] = {0};
+            sprintf(str1, "%02X", (unsigned char) tmp);
             strcat(uuid, str1);
         } else {
             if (31 < tmp && tmp < 127) {
@@ -243,7 +243,7 @@ static int decode_nal_sei_user_data_unregistered(HEVCSEIUnregistered *s, GetBitC
     buf_ref->data[size] = 0;
     buf_ref->size = size;
     s->buf_ref[s->nb_buf_ref++] = buf_ref;
-    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"info\":%s, \"local_time\":%ld}\n", 5, size, sei, NowInMilliSeconds());
+    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"uuid\":\"%s\", \"info\":\"%s\", \"local_time\":%ld}\n", 5, size, uuid, sei, NowInMilliSeconds());
 
     return 0;
 }
@@ -288,7 +288,7 @@ static int decode_nal_sei_type_unregistered(HEVCSEIUnregistered *s, GetBitContex
     buf_ref->data[size] = 0;
     buf_ref->size = size;
     s->buf_ref[s->nb_buf_ref++] = buf_ref;
-    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"info\":%s, \"local_time\":%ld}\n", type, size, sei, NowInMilliSeconds());
+    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"info\":\"%s\", \"local_time\":%ld}\n", type, size, sei, NowInMilliSeconds());
 
     return 0;
 }
