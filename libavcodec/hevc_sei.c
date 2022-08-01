@@ -29,6 +29,11 @@
 #include "golomb.h"
 #include "hevc_ps.h"
 #include "hevc_sei.h"
+#include "libavutil/time.h"
+
+static long NowInMilliSeconds() {
+    return av_gettime() / 1000;
+}
 
 static int decode_nal_sei_decoded_picture_hash(HEVCSEIPictureHash *s,
                                                GetByteContext *gb)
@@ -174,8 +179,8 @@ static int decode_registered_user_data_closed_caption(HEVCSEIA53Caption *s,
     return 0;
 }
 
-static int decode_nal_sei_user_data_unregistered(HEVCSEIUnregistered *s,
-                                                 GetByteContext *gb)
+static int decode_nal_sei_type_unregistered(HEVCSEIUnregistered *s,
+                                            GetByteContext *gb, int type)
 {
     AVBufferRef *buf_ref, **tmp;
     int size = bytestream2_get_bytes_left(gb);
@@ -196,6 +201,43 @@ static int decode_nal_sei_user_data_unregistered(HEVCSEIUnregistered *s,
     buf_ref->data[size] = 0;
     buf_ref->size = size;
     s->buf_ref[s->nb_buf_ref++] = buf_ref;
+    av_log(NULL, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"info\":\"%s\", \"local_time\":%ld}\n", type, size, buf_ref->data, NowInMilliSeconds());
+
+    return 0;
+}
+
+static int decode_nal_sei_user_data_unregistered(HEVCSEIUnregistered *s,
+                                                 GetByteContext *gb)
+{
+    AVBufferRef *buf_ref, **tmp;
+    int size = bytestream2_get_bytes_left(gb);
+
+    if (size < 16 || size >= INT_MAX - 1)
+       return AVERROR_INVALIDDATA;
+
+    tmp = av_realloc_array(s->buf_ref, s->nb_buf_ref + 1, sizeof(*s->buf_ref));
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    s->buf_ref = tmp;
+
+    buf_ref = av_buffer_alloc(size + 1);
+    if (!buf_ref)
+        return AVERROR(ENOMEM);
+
+    char uuid[48] = {0};
+    char uuid_tmp[48] = {0};
+    bytestream2_get_bufferu(gb, uuid_tmp, 16);
+    for(int i=0; i < 16; i++) {   
+        unsigned char str1[4] = {0};
+        sprintf(str1, "%02X", (unsigned char) uuid_tmp[i]);
+        strcat(uuid, str1);
+    }
+
+    bytestream2_get_bufferu(gb, buf_ref->data, size);
+    buf_ref->data[size] = 0;
+    buf_ref->size = size;
+    s->buf_ref[s->nb_buf_ref++] = buf_ref;
+    av_log(NULL, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"uuid\":\"%s\", \"info\":\"%s\", \"local_time\":%ld}\n", 5, size, uuid, buf_ref->data, NowInMilliSeconds());
 
     return 0;
 }
@@ -493,6 +535,7 @@ static int decode_nal_sei_prefix(GetBitContext *gb, GetByteContext *gbyte,
     case SEI_TYPE_FILM_GRAIN_CHARACTERISTICS:
         return decode_film_grain_characteristics(&s->film_grain_characteristics, gb);
     default:
+        decode_nal_sei_type_unregistered(&s->unregistered, gbyte, type);
         av_log(logctx, AV_LOG_DEBUG, "Skipped PREFIX SEI %d\n", type);
         return 0;
     }

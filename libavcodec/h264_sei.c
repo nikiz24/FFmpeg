@@ -38,8 +38,13 @@
 #include "h264_ps.h"
 #include "h264_sei.h"
 #include "sei.h"
+#include "libavutil/time.h"
 
 #define AVERROR_PS_NOT_FOUND      FFERRTAG(0xF8,'?','P','S')
+
+static long NowInMilliSeconds() {
+    return av_gettime() / 1000;
+}
 
 static const uint8_t sei_num_clock_ts_table[9] = {
     1, 1, 1, 2, 2, 3, 3, 2, 3
@@ -268,12 +273,91 @@ static int decode_unregistered_user_data(H264SEIUnregistered *h, GetBitContext *
         return AVERROR(ENOMEM);
     user_data = buf_ref->data;
 
-    for (i = 0; i < size; i++)
-        user_data[i] = get_bits(gb, 8);
+    char *sei;
+    sei = malloc(size - 15);
+    strcpy(sei, ""); 
+    char uuid[48] = {0};
+    for (i = 0; i < size; i++) {
+        char tmp = get_bits(gb, 8);
+        if (i < 16) {
+            unsigned char str1[4] = {0};
+            sprintf(str1, "%02X", (unsigned char) tmp);
+            strcat(uuid, str1);
+        } else {
+            if (31 < tmp && tmp < 127) {
+                user_data[i] = tmp;
+                char str1[2] = {tmp, '\0'};
+                strcat(sei, str1);
+            } else if (get_bits_left(gb) > 16) {
+                char tmp1 = get_bits(gb, 8);
+                int va = tmp * 256 + tmp1;
+                char str2[16];
+                sprintf(str2, "%d", va);
+                strcat(sei, str2);
+                user_data[i] = va;
+                i++;
+            }
+        }
+    }
 
     user_data[i] = 0;
     buf_ref->size = size;
     h->buf_ref[h->nb_buf_ref++] = buf_ref;
+    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"uuid\":\"%s\", \"info\":\"%s\", \"local_time\":%ld}\n", 5, size, uuid, sei, NowInMilliSeconds());
+
+    e = sscanf(user_data + 16, "x264 - core %d", &build);
+    if (e == 1 && build > 0)
+        h->x264_build = build;
+    if (e == 1 && build == 1 && !strncmp(user_data+16, "x264 - core 0000", 16))
+        h->x264_build = 67;
+
+    return 0;
+}
+
+static int decode_type_unregistered(H264SEIUnregistered *h, GetBitContext *gb,
+                                         void *logctx, int size, int type)
+{
+    uint8_t *user_data;
+    int e, build, i;
+    AVBufferRef *buf_ref, **tmp;
+
+    if (size >= INT_MAX - 1)
+        return AVERROR_INVALIDDATA;
+
+    tmp = av_realloc_array(h->buf_ref, h->nb_buf_ref + 1, sizeof(*h->buf_ref));
+    if (!tmp)
+        return AVERROR(ENOMEM);
+    h->buf_ref = tmp;
+
+    buf_ref = av_buffer_alloc(size + 1);
+    if (!buf_ref)
+        return AVERROR(ENOMEM);
+    user_data = buf_ref->data;
+
+    char *sei;
+    sei = malloc(size + 1);
+    strcpy(sei, "");
+    for (i = 0; i < size; i++) {
+        char tmp = get_bits(gb, 8);
+        if (31 < tmp && tmp < 127) {
+            user_data[i] = tmp;
+            char str1[2] = {tmp, '\0'};
+            strcat(sei, str1);
+        } else if (get_bits_left(gb) > 16) {
+            char tmp1 = get_bits(gb, 8);
+            int va = tmp * 256 + tmp1;
+            char str2[16];
+            sprintf(str2, "%d", va);
+            strcat(sei, str2);
+            user_data[i] = va;
+            i++;
+        }
+    }
+
+    user_data[i] = 0;
+    buf_ref->size = size;
+    h->buf_ref[h->nb_buf_ref++] = buf_ref;
+    av_log(logctx, AV_LOG_INFO, "SEI_INFO {\"type\":%d, \"size\":%d, \"info\":\"%s\", \"local_time\":%ld}\n", type, size, sei, NowInMilliSeconds());
 
     e = sscanf(user_data + 16, "x264 - core %d", &build);
     if (e == 1 && build > 0)
@@ -525,6 +609,7 @@ int ff_h264_sei_decode(H264SEIContext *h, GetBitContext *gb,
             ret = decode_film_grain_characteristics(&h->film_grain_characteristics, &gb_payload);
             break;
         default:
+            ret = decode_type_unregistered(&h->unregistered, &gb_payload, logctx, size, type);
             av_log(logctx, AV_LOG_DEBUG, "unknown SEI type %d\n", type);
         }
         if (ret < 0 && ret != AVERROR_PS_NOT_FOUND)

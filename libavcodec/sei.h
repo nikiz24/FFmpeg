@@ -83,6 +83,7 @@ enum {
     SEI_TYPE_DEPTH_SAMPLING_INFO                         = 53,
     SEI_TYPE_CONSTRAINED_DEPTH_PARAMETER_SET_IDENTIFIER  = 54,
     SEI_TYPE_GREEN_METADATA                              = 56,
+    SEI_TYPE_AGORA_STREAMING                             = 100,
     SEI_TYPE_STRUCTURE_OF_PICTURES_INFO                  = 128,
     SEI_TYPE_ACTIVE_PARAMETER_SETS                       = 129,
     SEI_TYPE_PARAMETER_SETS_INCLUSION_INDICATION         = SEI_TYPE_ACTIVE_PARAMETER_SETS,
