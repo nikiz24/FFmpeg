@@ -244,6 +244,11 @@ static int decode_main_header(NUTContext *nut)
     for (i = 0; i < 256;) {
         int tmp_flags  = ffio_read_varlen(bc);
         int tmp_fields = ffio_read_varlen(bc);
+        if (tmp_fields < 0) {
+            av_log(s, AV_LOG_ERROR, "fields %d is invalid\n", tmp_fields);
+            ret = AVERROR_INVALIDDATA;
+            goto fail;
+        }
 
         if (tmp_fields > 0)
             tmp_pts = get_s(bc);
@@ -353,8 +358,12 @@ static int decode_main_header(NUTContext *nut)
         ret = AVERROR(ENOMEM);
         goto fail;
     }
-    for (i = 0; i < stream_count; i++)
-        avformat_new_stream(s, NULL);
+    for (i = 0; i < stream_count; i++) {
+        if (!avformat_new_stream(s, NULL)) {
+            ret = AVERROR(ENOMEM);
+            goto fail;
+        }
+    }
 
     return 0;
 fail:
@@ -802,19 +811,23 @@ static int nut_read_header(AVFormatContext *s)
     NUTContext *nut = s->priv_data;
     AVIOContext *bc = s->pb;
     int64_t pos;
-    int initialized_stream_count;
+    int initialized_stream_count, ret;
 
     nut->avf = s;
 
     /* main header */
     pos = 0;
+    ret = 0;
     do {
+        if (ret == AVERROR(ENOMEM))
+            return ret;
+
         pos = find_startcode(bc, MAIN_STARTCODE, pos) + 1;
         if (pos < 0 + 1) {
             av_log(s, AV_LOG_ERROR, "No main startcode found.\n");
             return AVERROR_INVALIDDATA;
         }
-    } while (decode_main_header(nut) < 0);
+    } while ((ret = decode_main_header(nut)) < 0);
 
     /* stream headers */
     pos = 0;
